@@ -1,23 +1,58 @@
 package common
 
+import (
+	"encoding/binary"
+)
+
 type ArithUint256 struct {
 	pn [8]uint32
 }
 
+// FromUint64
+func (a *ArithUint256) FromUint64(v uint64) {
+	a.pn[0] = uint32(v)
+	a.pn[1] = uint32(v >> 32)
+	for i := 2; i < 7; i++ {
+		a.pn[i] = 0
+	}
+}
+
+func reverse(s []byte) []byte {
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
+	return s
+}
+
+// FromHash
+func (a *ArithUint256) FromHash(h Hash) {
+	for i := 0; i < 8; i++ {
+		a.pn[i] = 0
+	}
+	hBytes := h.Bytes()
+	for i := 0; i < 8; i++ {
+		buf := hBytes[i*4 : (i+1)*4]
+		buf = reverse(buf)
+		a.pn[7-i] = binary.LittleEndian.Uint32(buf)
+	}
+}
+
+// SetCompact set nBits
 func (a *ArithUint256) SetCompact(v uint32) {
 	nSize := v >> 24
 	nWord := v & 0x007fffff
 	if nSize <= 3 {
 		nWord >>= 8 * (3 - nSize)
-		a.pn[0] = nWord
+		a.FromUint64(uint64(nWord))
 	} else {
-		a.pn[0] = nWord
-		a.LeftShift(int(8 * (nSize - 3)))
+		a.FromUint64(uint64(nWord))
+		a.LeftShift(8 * (nSize - 3))
 	}
 }
 
+// GetCompact get nBits
 func (a *ArithUint256) GetCompact() uint32 {
-	aBak := &(*a)
+	aBak := a.Copy()
 	nSize := (a.bits() + 7) / 8
 	var nCompact uint32
 	if nSize <= 3 {
@@ -34,24 +69,44 @@ func (a *ArithUint256) GetCompact() uint32 {
 	return nCompact
 }
 
+// GetBytes
+func (a *ArithUint256) GetBytes() []byte {
+	res := make([]byte, 0)
+	for i := 0; i < 8; i++ {
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, a.pn[i])
+		buf = reverse(buf)
+		res = append(buf, res...)
+	}
+	return res
+}
+
 func (a *ArithUint256) getLow64() uint64 {
 	return uint64(a.pn[0]) | uint64(a.pn[1])<<32
 }
 
+func (a *ArithUint256) Copy() *ArithUint256 {
+	b := new(ArithUint256)
+	for i := 0; i < 8; i++ {
+		b.pn[i] = a.pn[i]
+	}
+	return b
+}
+
 // LeftShift a << shift
-func (a *ArithUint256) LeftShift(shift int) {
+func (a *ArithUint256) LeftShift(shift uint32) {
 	pnBak := a.pn
 	for i := 0; i < 8; i++ {
 		a.pn[i] = 0
 	}
 	k := shift / 32
 	shift %= 32
-	for i := 0; i < 8; i++ {
+	for i := uint32(0); i < 8; i++ {
 		if i+k+1 < 8 && shift != 0 {
-			a.pn[i+k+1] |= pnBak[i] >> uint32(32-shift)
+			a.pn[i+k+1] |= pnBak[i] >> (32 - shift)
 		}
 		if i+k < 8 {
-			a.pn[i+k] |= pnBak[i] << uint32(shift)
+			a.pn[i+k] |= pnBak[i] << shift
 		}
 	}
 }
@@ -74,6 +129,7 @@ func (a *ArithUint256) RightShift(shift int) {
 	}
 }
 
+// MulU32
 func (a *ArithUint256) MulU32(b uint32) {
 	var carry uint64
 	for i := 0; i < 8; i++ {
@@ -81,6 +137,13 @@ func (a *ArithUint256) MulU32(b uint32) {
 		a.pn[i] = uint32(n & 0xffffffff)
 		carry = n >> 32
 	}
+}
+
+// MulU64
+func (a *ArithUint256) MulU64(v uint64) {
+	b := new(ArithUint256)
+	b.FromUint64(v)
+	a.Mul(b)
 }
 
 // Mul a *= b
@@ -97,10 +160,17 @@ func (a *ArithUint256) Mul(b *ArithUint256) {
 	a.pn = tmp.pn
 }
 
+// DivU64
+func (a *ArithUint256) DivU64(v uint64) {
+	b := new(ArithUint256)
+	b.FromUint64(v)
+	a.Div(b)
+}
+
 // Div a /= b
 func (a *ArithUint256) Div(b *ArithUint256) {
-	div := &(*b)
-	num := *a
+	div := b.Copy()
+	num := a.Copy()
 	for i := 0; i < 8; i++ {
 		a.pn[i] = 0
 	}
@@ -113,7 +183,7 @@ func (a *ArithUint256) Div(b *ArithUint256) {
 		return
 	}
 	shift := numBits - divBits
-	div.LeftShift(numBits)
+	div.LeftShift(uint32(shift))
 	for shift >= 0 {
 		if num.Cmp(div) >= 0 {
 			num.Sub(div)
